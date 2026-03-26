@@ -52,26 +52,97 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
             character: {
                 character: {//武将注册
                     //格式：武将id: ["性别", "势力", 血量上限, ["技能1", "技能2"], ["标签"]]
+                    //舰种被动（装甲防护zhuangjiafh、防空fangkong2、大角度规避dajiaoduguibi、火控雷达huokongld）直接引用舰R牌将的技能ID
+
+                    // ① 塔林 - ΒΜΦCCCP 轻巡 4血 防空+弥坚
+                    rsha_talin: ["female", "ΒΜΦCCCP", 4, ["qingxuncl", "fangkong2", "rsha_mijian"], ["des:塔林，苏联轻巡洋舰"]],
 
                 },
                 translate: {//武将和技能翻译
-
+                    rsha_talin: "塔林",
                 },
             },
             card: {
-                card: {//卡牌技能
-
-                },
-                translate: {//卡牌翻译
-
-                },
-                list: [],//牌堆
+                card: {},
+                translate: {},
+                list: [],
             },
             skill: {//技能
                 skill: {
 
+                    // ============================================
+                    // ① 塔林 - 弥坚
+                    // 受到1点伤害后，四选一：摸2张牌/下一张杀无法被响应/下一次造成伤害+1/获得1护甲
+                    // ============================================
+                    rsha_mijian: {
+                        audio: 2,
+                        trigger: { player: "damageEnd" },
+                        filter: function (event, player) {
+                            return true;
+                        },
+                        check: function (event, player) {
+                            return true;
+                        },
+                        content: function () {
+                            "step 0"
+                            player.chooseControl('摸两张牌', '下一张杀无法被响应', '下一次造成伤害+1', '获得一点护甲')
+                                .set('prompt', get.prompt('rsha_mijian'))
+                                .set('prompt2', get.prompt2('rsha_mijian'))
+                                .set('ai', function () {
+                                    var player = get.player();
+                                    if (player.hp <= 1) return 3;//低血量优先护甲
+                                    if (player.countCards('h') < 2) return 0;//手牌少优先摸牌
+                                    return 2;//默认选伤害+1
+                                });
+                            "step 1"
+                            switch (result.index) {
+                                case 0:
+                                    player.draw(2);
+                                    break;
+                                case 1:
+                                    player.addTempSkill('rsha_mijian_nores');
+                                    break;
+                                case 2:
+                                    player.addTempSkill('rsha_mijian_jiashang');
+                                    break;
+                                case 3:
+                                    player.changeHujia(1);
+                                    break;
+                            }
+                        },
+                        intro: {
+                            content: function () {
+                                return get.translation('rsha_mijian_info');
+                            },
+                        },
+                    },
+                    rsha_mijian_nores: {//弥坚子技能：下一张杀不可被响应
+                        trigger: { player: "useCard" },
+                        forced: true,
+                        filter: function (event, player) {
+                            return event.card.name == "sha" || event.card.name == "sheji9";
+                        },
+                        content: function () {
+                            trigger.directHit.addArray(game.players);
+                            player.removeSkill('rsha_mijian_nores');
+                        },
+                        charlotte: true,
+                    },
+                    rsha_mijian_jiashang: {//弥坚子技能：下一次造成伤害+1
+                        trigger: { source: "damageBegin1" },
+                        forced: true,
+                        content: function () {
+                            trigger.num++;
+                            player.removeSkill('rsha_mijian_jiashang');
+                        },
+                        charlotte: true,
+                    },
+
                 },
                 translate: {//技能翻译
+
+                    rsha_mijian: "弥坚",
+                    rsha_mijian_info: "当你受到伤害后，你可以选择一项：1.摸两张牌；2.下一张使用的【杀】无法被响应；3.下一次造成的伤害+1；4.获得一点护甲。",
 
                 },
             },
