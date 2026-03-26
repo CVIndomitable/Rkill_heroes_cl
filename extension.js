@@ -85,6 +85,9 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     // ⑧ 阿拉斯加 - USN 战列BB 4血 装甲防护+先锋+狂欢开幕
                     alasijia_R: ["female", "USN", 4, ["zhuangjiafh", "xianfeng", "kuanhuankaimu"], ["des:阿拉斯加，美国大型巡洋舰"]],
 
+                    // ⑨ 齐柏林伯爵 - KMS 航母 4血 枭啸+鹰返
+                    qibolin_R: ["female", "KMS", 4, ["hangmucv", "xiaoxiao", "yingfan"], ["des:齐柏林伯爵，德国航空母舰"]],
+
                 },
                 translate: {//武将名称翻译
                     talin_R: "塔林",
@@ -95,6 +98,7 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     jiage_R: "加贺",
                     tirpitz_R: "提尔比茨",
                     alasijia_R: "阿拉斯加",
+                    qibolin_R: "齐柏林伯爵",
                 },
             },
             card: {
@@ -471,6 +475,126 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                         },
                         intro: {
                             content: function () { return get.translation('daike_info'); },
+                        },
+                    },
+
+                    // ============================================
+                    // ⑨ 齐柏林伯爵 - 枭啸
+                    // 锁定技：与齐柏林发生伤害关系的角色（打齐柏林或被打）获得"俯冲"标记
+                    // 触发时机：damageEnd（双向监听：player=被打到, source=打出伤害）
+                    // 判定：
+                    //   - 我是受害者（trigger.player == player）→ 攻击者（trigger.source）获得俯冲
+                    //   - 我是攻击者（trigger.source == player）→ 受害者（trigger.player）获得俯冲
+                    // 有yingfan_immune标记的角色免疫，不获得俯冲
+                    // ============================================
+                    xiaoxiao: {
+                        audio: 2,
+                        forced: true,//锁定技
+                        trigger: { player: "damageEnd", source: "damageEnd" },
+                        //双向监听：player=被打时触发；source=打人时触发
+                        filter: function (event, player) {
+                            //排除自伤（攻击自己）
+                            if (event.player == event.source) return false;
+                            //情况一：我是被打方，攻击者是别人
+                            if (event.player == player && event.source && event.source != player) return true;
+                            //情况二：我是攻击方，受害者是别人
+                            if (event.source == player && event.player && event.player != player) return true;
+                            return false;
+                        },
+                        content: function () {
+                            //确定获得俯冲标记的目标
+                            var markTarget;
+                            if (trigger.player == player) {
+                                markTarget = trigger.source;//有人打了我 → 攻击者获得俯冲
+                            } else {
+                                markTarget = trigger.player;//我打了别人 → 被打者获得俯冲
+                            }
+                            if (markTarget && !markTarget.hasSkill('yingfan_immune')) {
+                                markTarget.addMark('fuzong', 1);//俯冲标记+1（可见，供鹰返选择）
+                            }
+                        },
+                        intro: {
+                            content: function () { return get.translation('xiaoxiao_info'); },
+                        },
+                    },
+
+                    // ============================================
+                    // ⑨ 齐柏林伯爵 - 鹰返
+                    // 触发时机：phaseJieshuBegin（结束阶段）
+                    // 效果：选一名有俯冲标记的角色→该角色二选一：
+                    //   ① 将全部手牌交给齐柏林（失去手牌但无永久损失）
+                    //   ② 失去1点体力上限 + 永久免疫（不再获得俯冲，不再被鹰返选中）
+                    // 实现：
+                    //   - 选目标后移除其俯冲标记
+                    //   - target.chooseControl让目标自选
+                    //   - 方案②通过addSkill('yingfan_immune')实现永久免疫
+                    // ============================================
+                    yingfan: {
+                        audio: 2,
+                        trigger: { player: "phaseJieshuBegin" },//结束阶段开始时触发
+                        filter: function (event, player) {
+                            //需要场上有至少一名（非自己）持有俯冲标记的角色
+                            return game.hasPlayer(function (t) {
+                                return t != player && t.countMark('fuzong') > 0;
+                            });
+                        },
+                        check: function (event, player) {
+                            return true;//AI总是愿意发动（对敌人有害）
+                        },
+                        content: function () {
+                            "step 0"
+                            //选择一名有俯冲标记的角色作为目标
+                            player.chooseTarget(get.prompt('yingfan'), function (card, player, target) {
+                                return target != player && target.countMark('fuzong') > 0;
+                            }).set('ai', function (target) {
+                                //AI：优先选敌人（负态度=优先攻击对象）
+                                return -get.attitude(get.player(), target);
+                            });
+                            "step 1"
+                            if (!result.bool || !result.targets || !result.targets.length) {
+                                event.finish(); return;
+                            }
+                            var target = result.targets[0];
+                            event.yingfanTarget = target;
+                            //移除该目标的所有俯冲标记（已被鹰返"收割"）
+                            target.removeMark('fuzong', target.countMark('fuzong'));
+                            //让目标自主选择：交手牌 or 失去体力上限+免疫
+                            target.chooseControl('交出所有手牌', '失去1点体力上限并获得永久免疫')
+                                .set('prompt', get.translation(player) + '的鹰返：请选择一项')
+                                .set('ai', function () {
+                                    var t = get.player();//此AI视角是目标
+                                    //濒死或体力上限为1时，不能失去体力上限
+                                    if (t.hp <= 1 || t.maxHp <= 1) return 0;
+                                    //计算手牌总价值，若价值较高则宁可失去体力上限
+                                    var cardValue = t.getCards('h').reduce(function (sum, c) {
+                                        return sum + (get.value(c, t) || 0);
+                                    }, 0);
+                                    return cardValue > 8 ? 1 : 0;//手牌价值高则选免疫
+                                });
+                            "step 2"
+                            var target = event.yingfanTarget;
+                            if (result.index == 0) {
+                                //方案①：目标将所有手牌交给齐柏林
+                                var cards = target.getCards('h');
+                                if (cards.length > 0) {
+                                    player.gain(cards, target, 'give');//齐柏林获得目标所有手牌
+                                }
+                            } else {
+                                //方案②：目标失去1点体力上限 + 永久免疫
+                                target.loseMaxHp();//体力上限-1
+                                target.addSkill('yingfan_immune');//永久免疫技能
+                                game.log(target, '永久免疫了齐柏林伯爵的连环效果');
+                            }
+                        },
+                        intro: {
+                            content: function () { return get.translation('yingfan_info'); },
+                        },
+                    },
+                    yingfan_immune: {//鹰返免疫子技能：防止再次获得俯冲标记和被鹰返选中
+                        //此技能通过addSkill永久添加到目标角色，不会自动移除
+                        charlotte: false,//在武将牌上显示（让玩家知道自己免疫）
+                        intro: {
+                            content: function () { return '已免疫齐柏林伯爵的枭啸和鹰返效果。'; },
                         },
                     },
 
@@ -1013,6 +1137,15 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
 
                     daike: "代课",
                     daike_info: "你使用基本牌或普通锦囊结算后，你可以令一名非目标角色摸一张牌，然后弃置一张手牌。",
+
+                    xiaoxiao: "枭啸",
+                    xiaoxiao_info: "锁定技。其他角色对你造成伤害，或你对其他角色造成伤害后，该角色获得1枚「俯冲」标记（有永久免疫者除外）。",
+
+                    yingfan: "鹰返",
+                    yingfan_info: "结束阶段，你可以选择一名有「俯冲」标记的角色，令其选择：①交出所有手牌；②失去1点体力上限并永久免疫枭啸和鹰返效果。",
+
+                    yingfan_immune: "永久免疫",
+                    fuzong: "俯冲",
 
                     xianfeng: "先锋",
                     xianfeng_info: "锁定技。当你使用牌指定目标后，对于其中未横置的目标，该牌对其无效，然后横置其武将牌，若有狂欢开幕则摸1张牌。",
