@@ -67,10 +67,14 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     // ② 波特兰 - USN 重巡 4血 火控雷达+善战
                     botelan_R: ["female", "USN", 4, ["zhongxunca", "huokongld", "shanzhan"], ["des:波特兰，美国重巡洋舰"]],
 
+                    // ③ SP深雪 - IJN 驱逐 3血 大角度规避+彗袭
+                    sp_shenyue_R: ["female", "IJN", 3, ["quzhudd", "dajiaoduguibi", "huijie"], ["des:SP深雪，日本驱逐舰"]],
+
                 },
                 translate: {//武将名称翻译
                     talin_R: "塔林",
                     botelan_R: "波特兰",
+                    sp_shenyue_R: "SP深雪",
                 },
             },
             card: {
@@ -249,6 +253,98 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                         },
                     },
 
+                    // ============================================
+                    // ③ SP深雪 - 彗袭
+                    // 触发时机：phaseUseBegin（出牌阶段开始时）
+                    // 效果：
+                    //   1. 玩家从按钮列表中选择一种基本牌/非延时锦囊类型
+                    //   2. 本回合内获得一次机会：可以将任意一张手牌视为所选类型使用（子技能huijie_viewas）
+                    //   3. 本回合内锁定类别：只能使用所选类别的牌（子技能huijie_lock，mod.cardEnabled限制）
+                    // ============================================
+                    huijie: {
+                        audio: 2,
+                        trigger: { player: "phaseUseBegin" },//出牌阶段开始时触发
+                        filter: function (event, player) {
+                            return player.countCards('h') > 0;//手牌不为空才能发动
+                        },
+                        check: function (event, player) {
+                            return player.countCards('h') > 1;//AI：手牌充足时才发动，避免手牌耗尽
+                        },
+                        content: function () {
+                            "step 0"
+                            //构建可选类型列表（基本牌+非延时锦囊）
+                            var vcards = [];
+                            //基本牌
+                            for (var name of ['sha', 'shan', 'tao', 'jiu']) {
+                                if (lib.card[name]) vcards.push(['基本', '', name]);
+                            }
+                            //非延时锦囊（标准牌中的普通锦囊）
+                            for (var name of ['wuge', 'guohe', 'shunshou', 'jiedao', 'juedou', 'wanjian', 'nanman', 'wugu']) {
+                                //get.type2检查是否为延时锦囊，过滤掉delay类
+                                if (lib.card[name] && get.type2(name) != 'delay') {
+                                    vcards.push(['锦囊', '', name]);
+                                }
+                            }
+                            player.chooseButton('彗袭：选择本回合可视为使用的牌类型', [vcards, 'vcard'], true)
+                                .set('ai', function () {
+                                    //AI优先选杀（攻击性更强）
+                                    return _status.event.dialog.buttons[0];
+                                });
+                            "step 1"
+                            if (!result.bool) { event.finish(); return; }//玩家取消则不发动
+                            var name = result.links[0][2];//选中的牌名（如'sha'）
+                            //存储选中的牌名供viewas子技能使用
+                            player.setStorage('huijie_viewas_name', name);
+                            //存储锁定的类别（'basic'或'trick'）供lock子技能使用
+                            player.setStorage('huijie_locked', get.type(name));
+                            //添加视为技能：本回合可将任意手牌视为选中类型使用一次
+                            player.addTempSkill('huijie_viewas', { player: 'phaseEnd' });
+                            //添加锁定技能：本回合只能使用同类别的牌
+                            player.addTempSkill('huijie_lock', { player: 'phaseEnd' });
+                        },
+                        intro: {
+                            content: function () {
+                                return get.translation('huijie_info');
+                            },
+                        },
+                    },
+                    huijie_viewas: {//彗袭子技能：将手牌视为选中类型使用（本回合1次）
+                        //此技能由addTempSkill在phaseUseBegin时临时添加，phaseEnd时自动移除
+                        charlotte: true,
+                        enable: 'chooseToUse',//出牌阶段可主动发动
+                        usable: 1,//本回合仅可使用1次（usable按回合重置，与addTempSkill配合实现精确1次限制）
+                        filter: function (event, player) {
+                            //有存储的目标牌名，且手上有牌可消耗
+                            return !!player.getStorage('huijie_viewas_name') && player.countCards('h') > 0;
+                        },
+                        filterCard: function (card, player) {
+                            return true;//任意手牌均可选为消耗
+                        },
+                        viewAs: function (cards, player) {
+                            //视为使用storage中存储的牌类型
+                            return { name: player.getStorage('huijie_viewas_name'), isCard: true };
+                        },
+                        position: 'h',//从手牌中选择
+                        check: function (card) {
+                            return 5 - get.value(card);//AI：优先消耗价值低的牌
+                        },
+                        ai: { result: { player: 1 } },
+                    },
+                    huijie_lock: {//彗袭子技能：锁定类别，本回合只能使用同类别的牌
+                        charlotte: true,
+                        mod: {
+                            cardEnabled: function (card, player) {
+                                var locked = player.getStorage('huijie_locked');
+                                if (!locked) return;//没有锁定则不干预
+                                var type = get.type(card);
+                                //装备牌和延时锦囊不受限制（不影响正常装备和判定）
+                                if (type == 'equip' || type == 'delay') return;
+                                //只允许使用与锁定类别相同的牌
+                                if (type != locked) return false;
+                            },
+                        },
+                    },
+
                 },
                 translate: {//技能翻译
 
@@ -257,6 +353,9 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
 
                     shanzhan: "善战",
                     shanzhan_info: "每轮限X+1次，你可以将一张基本牌当作任意一张基本牌使用或打出（X为你本局累计造成伤害点数）。",
+
+                    huijie: "彗袭",
+                    huijie_info: "出牌阶段开始时，你可以选择一种基本牌或非延时锦囊类型：本回合可将任意一张手牌视为该类型使用一次，且本回合只能使用该类别的牌。",
 
                 },
             },
