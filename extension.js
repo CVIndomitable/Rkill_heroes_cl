@@ -1337,10 +1337,10 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     jiangongchuji_info: "当你用【杀】对一名角色造成伤害后，你可以观看其手牌并获得其中一张；若该牌不是黑色，其视为对你使用一张无距离限制的【杀】。",
 
                     modaiqijian: "末代旗舰",
-                    modaiqijian_info: "当你使用普通锦囊后，你可以将一张手牌扣置于你的武将牌上（称为"讯"牌）。",
+                    modaiqijian_info: '当你使用普通锦囊后，你可以将一张手牌扣置于你的武将牌上（称为"讯"牌）。',
 
                     haitiantongxun: "海天通讯",
-                    haitiantongxun_info: "当一名角色判定时，你可以打出一张"讯"牌替换该判定牌。若你失去了最后一张"讯"牌，你回复1点体力。",
+                    haitiantongxun_info: '当一名角色判定时，你可以打出一张"讯"牌替换该判定牌。若你失去了最后一张"讯"牌，你回复1点体力。',
 
                     bugehuwei: "不太合格的护卫",
                     bugehuwei_info: "游戏开始时，你选择一名其他角色作为护卫对象。当护卫对象成为其他角色使用牌的目标后，你从牌堆摸一张牌并展示之。当护卫对象体力变动时，你可以更换护卫对象。",
