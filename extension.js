@@ -76,6 +76,9 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     // ⑤ SP大淀 - IJN 轻巡 3血 防空+末代旗舰+海天通讯
                     sp_dadian_R: ["female", "IJN", 3, ["qingxuncl", "fangkong2", "modaiqijian", "haitiantongxun"], ["des:SP大淀，日本轻巡洋舰旗舰"]],
 
+                    // ⑥ 加贺 - IJN 航母 4血 机动舰队+舰攻出击
+                    jiage_R: ["female", "IJN", 4, ["hangmucv", "jidongjiandui", "jiangongchuji"], ["des:加贺，日本舰队航空母舰"]],
+
                 },
                 translate: {//武将名称翻译
                     talin_R: "塔林",
@@ -83,6 +86,7 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     sp_shenyue_R: "SP深雪",
                     deyizhi_R: "德意志A59",
                     sp_dadian_R: "SP大淀",
+                    jiage_R: "加贺",
                 },
             },
             card: {
@@ -463,6 +467,110 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     },
 
                     // ============================================
+                    // ⑥ 加贺 - 机动舰队
+                    // 锁定技，两个复合效果：
+                    // 1. mod.suit: ♦基本牌视为♣（方块基本牌在花色判定时当梅花处理）
+                    //    - 意义：♦杀 → ♣杀（黑色），可进一步触发黑色加成效果
+                    // 2. trigger: 黑色杀对有防具角色造成伤害时，伤害+1
+                    // 实现思路：
+                    //   - mod对象始终生效（不需要触发，是属性修改）
+                    //   - forced: true + trigger实现锁定触发（自动不询问）
+                    // ============================================
+                    jidongjiandui: {
+                        audio: 2,
+                        nobracket: true,//防止4字技能名截断显示
+                        forced: true,//锁定技：自动触发，不询问玩家
+                        mod: {
+                            suit: function (card, suit) {
+                                //将方块基本牌视为梅花（mod.suit参数：card=牌对象, suit=原始花色字符串）
+                                //返回新花色字符串则替换，不返回则保持原花色
+                                if (suit == 'diamond' && get.type(card) == 'basic') return 'club';
+                            }
+                        },
+                        trigger: { source: "damageBegin1" },//加贺作为伤害来源时（source=加贺）触发
+                        filter: function (event, player) {
+                            //条件一：造成伤害的牌是杀
+                            if (!event.card || event.card.name != 'sha') return false;
+                            //条件二：该杀是黑色的（♠或♣，含经mod转换后的♦杀→♣杀）
+                            if (get.color(event.card, player) != 'black') return false;
+                            //条件三：受伤目标有防具（getEquip(2)返回防具槽装备，null=没有）
+                            return event.player.getEquip(2) != null;
+                        },
+                        content: function () {
+                            trigger.num++;//伤害点数+1
+                        },
+                        intro: {
+                            content: function () { return get.translation('jidongjiandui_info'); },
+                        },
+                    },
+
+                    // ============================================
+                    // ⑥ 加贺 - 舰攻出击
+                    // 触发时机：source: damageEnd（加贺用杀造成伤害后）
+                    // 效果：
+                    //   1. 观看受伤目标手牌，选取1张（chooseButton展示目标手牌）
+                    //   2. 若取到非黑色牌，该目标视为对加贺使用一张无距限杀（可能反伤）
+                    // 设计意图：
+                    //   - 高风险高回报：强行取牌，但若取到红色牌则被反打
+                    //   - 黑色牌（含由机动舰队转换来的♣）安全，红色牌（♥♦）有风险
+                    // ============================================
+                    jiangongchuji: {
+                        audio: 2,
+                        nobracket: true,
+                        trigger: { source: "damageEnd" },//加贺造成伤害结算完毕后触发
+                        filter: function (event, player) {
+                            //只对杀造成的伤害触发，且目标需要在场且有手牌
+                            return event.card && event.card.name == 'sha'
+                                && event.player.isIn()
+                                && event.player.countCards('h') > 0;
+                        },
+                        check: function (event, player) {
+                            //AI判断：对敌人（态度<0）且其有手牌时发动
+                            return get.attitude(player, event.player) < 0;
+                        },
+                        content: function () {
+                            "step 0"
+                            var target = trigger.player;//受伤目标（被加贺打到的人）
+                            event.jiagaTarget = target;
+                            //展示目标的手牌供加贺选择（仅加贺可见，其他人不知道内容）
+                            player.chooseButton(
+                                ['舰攻出击：观看并选取一张' + get.translation(target) + '的手牌',
+                                    [target.getCards('h'), 'card']],
+                                true//true=必须选择（不可取消）
+                            ).set('ai', function (button) {
+                                var p = get.player();
+                                var v = get.value(button.link, p);
+                                //黑色牌不会触发反击，更安全，稍微加权
+                                if (get.color(button.link) == 'black') v += 1;
+                                return v;
+                            });
+                            "step 1"
+                            if (!result.bool || !result.links || !result.links.length) {
+                                event.finish(); return;
+                            }
+                            event.jiagaCard = result.links[0];//选中的牌
+                            //加贺获得目标手中的该牌（'give'表示从他人手中夺取的动画效果）
+                            player.gain(event.jiagaCard, event.jiagaTarget, 'give');
+                            "step 2"
+                            //判断取到的牌是否为黑色（♠♣）
+                            if (get.color(event.jiagaCard) != 'black') {
+                                //非黑色：目标视为对加贺使用一张无距离限制的杀
+                                var t = event.jiagaTarget;
+                                if (t.isIn() && player.isIn()) {
+                                    //useCard: target(t)使用虚拟杀对player(加贺)
+                                    //第三参数false: 非连锁（不因技能触发而连锁使用）
+                                    var next = t.useCard({ name: 'sha', isCard: true }, player, false);
+                                    next.set('addCount', false);//不计入t的出牌次数
+                                    next.set('nodistance', true);//绕过距离限制
+                                }
+                            }
+                        },
+                        intro: {
+                            content: function () { return get.translation('jiangongchuji_info'); },
+                        },
+                    },
+
+                    // ============================================
                     // ⑤ SP大淀 - 末代旗舰
                     // 触发时机：useCard（使用普通锦囊时）
                     // 效果：将一张手牌扣置到角色牌上，作为"讯"牌储备供海天通讯使用
@@ -616,6 +724,12 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
 
                     daike: "代课",
                     daike_info: "你使用基本牌或普通锦囊结算后，你可以令一名非目标角色摸一张牌，然后弃置一张手牌。",
+
+                    jidongjiandui: "机动舰队",
+                    jidongjiandui_info: "锁定技。你的♦基本牌视为♣。你使用黑色【杀】对有防具的角色造成伤害时，该伤害+1。",
+
+                    jiangongchuji: "舰攻出击",
+                    jiangongchuji_info: "当你用【杀】对一名角色造成伤害后，你可以观看其手牌并获得其中一张；若该牌不是黑色，其视为对你使用一张无距离限制的【杀】。",
 
                     modaiqijian: "末代旗舰",
                     modaiqijian_info: "当你使用普通锦囊后，你可以将一张手牌扣置于你的武将牌上（称为"讯"牌）。",
