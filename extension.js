@@ -73,12 +73,16 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     // ④ 德意志A59 - KMS 轻巡 3血 防空+多能+代课
                     deyizhi_R: ["female", "KMS", 3, ["qingxuncl", "fangkong2", "duoneng", "daike"], ["des:德意志A59，德国轻巡洋舰"]],
 
+                    // ⑤ SP大淀 - IJN 轻巡 3血 防空+末代旗舰+海天通讯
+                    sp_dadian_R: ["female", "IJN", 3, ["qingxuncl", "fangkong2", "modaiqijian", "haitiantongxun"], ["des:SP大淀，日本轻巡洋舰旗舰"]],
+
                 },
                 translate: {//武将名称翻译
                     talin_R: "塔林",
                     botelan_R: "波特兰",
                     sp_shenyue_R: "SP深雪",
                     deyizhi_R: "德意志A59",
+                    sp_dadian_R: "SP大淀",
                 },
             },
             card: {
@@ -458,6 +462,128 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                         },
                     },
 
+                    // ============================================
+                    // ⑤ SP大淀 - 末代旗舰
+                    // 触发时机：useCard（使用普通锦囊时）
+                    // 效果：将一张手牌扣置到角色牌上，作为"讯"牌储备供海天通讯使用
+                    // 实现：
+                    //   - addToExpansion + gaintag('modaiqijian') 实现扣置
+                    //   - intro.content: "expansion" 在武将牌上显示当前讯牌数
+                    //   - onremove 在技能失去时清空剩余讯牌（防止残留数据）
+                    // ============================================
+                    modaiqijian: {
+                        audio: 2,
+                        nobracket: true,//防止"末代旗舰"被截断为"末代"
+                        trigger: { player: "useCard" },//使用锦囊牌后触发
+                        filter: function (event, player) {
+                            //只有使用普通锦囊（非延时）时触发，且需要有手牌可以扣置
+                            return get.type(event.card) == 'trick'
+                                && get.type2(event.card) != 'delay'
+                                && player.countCards('h') > 0;
+                        },
+                        check: function (event, player) {
+                            return true;//AI：始终愿意囤积讯牌（是资源，囤积越多越有利）
+                        },
+                        content: function () {
+                            "step 0"
+                            //玩家选一张手牌，将其扣置为"讯"牌储备
+                            player.chooseCard('h', get.prompt('modaiqijian'), true)
+                                .set('ai', function (card) {
+                                    return 6 - get.value(card);//AI：优先扣置价值较低的牌
+                                });
+                            "step 1"
+                            if (!result.bool || !result.cards || result.cards.length == 0) {
+                                event.finish(); return;
+                            }
+                            //addToExpansion将选中牌从手牌区移到扩展区（角色牌上的附属牌槽）
+                            //gaintag("modaiqijian")标记这些牌属于末代旗舰，供getExpansions检索
+                            player.addToExpansion(result.cards, player, "give").gaintag.add("modaiqijian");
+                        },
+                        intro: {
+                            //在武将牌上显示当前扣置的讯牌（展示扩展区中的所有讯牌）
+                            content: "expansion",
+                            markcount: "expansion",
+                        },
+                        onremove: function (player, skill) {
+                            //武将死亡或技能移除时，将所有剩余讯牌弃置到弃牌堆（清理数据）
+                            var cards = player.getExpansions(skill);
+                            if (cards.length) player.loseToDiscardpile(cards);
+                        },
+                    },
+
+                    // ============================================
+                    // ⑤ SP大淀 - 海天通讯
+                    // 触发时机：global judge（任意角色判定时，判定牌翻开前）
+                    // 效果：
+                    //   - 打出一张"讯"牌替换判定牌（改变判定结果）
+                    //   - 失去最后一张讯牌时，回复1点体力
+                    // 实现思路（参考guidao鬼道的判定牌替换模式）：
+                    //   1. 弃置旧判定牌（game.cardsDiscard）
+                    //   2. 讯牌替换到判定位（trigger.player.judging[0] = xun）
+                    //   3. 将讯牌加入结算追踪队列（trigger.orderingCards.addArray）
+                    //   4. 提前保存"是否是最后一张讯牌"标志，避免异步计数出错
+                    // ============================================
+                    haitiantongxun: {
+                        audio: 2,
+                        nobracket: true,//防止"海天通讯"被截断
+                        trigger: { global: "judge" },//全局监听：任意角色进行判定时触发
+                        filter: function (event, player) {
+                            //自己的扩展区有讯牌才能发动
+                            return player.getExpansions('modaiqijian').length > 0;
+                        },
+                        direct: true,//直接触发（不显示"是否发动"确认框），与guidao鬼道一致
+                        content: function () {
+                            "step 0"
+                            var expansions = player.getExpansions('modaiqijian');
+                            //展示当前判定情况及可选讯牌，玩家自行决定是否打出
+                            player.chooseButton(
+                                [
+                                    get.translation(trigger.player) + '的' +
+                                    (trigger.judgestr || '') + '判定为' +
+                                    get.translation(trigger.player.judging[0]) +
+                                    '，' + get.prompt('haitiantongxun'),
+                                    [expansions, 'card']
+                                ],
+                                false//false=可取消，不强制选择
+                            ).set('ai', function (button) {
+                                var triggerEvt = _status.event.getTrigger();
+                                var target = triggerEvt.player;
+                                var p = get.player();
+                                //judge()返回值：正数表示该牌对判定目标有利，负数表示不利
+                                var cardScore = triggerEvt.judge(button.link);
+                                var curScore = triggerEvt.judge(triggerEvt.player.judging[0]);
+                                var att = get.attitude(p, target);
+                                //友方：希望判定有利（cardScore高更好）；敌方：希望判定不利（cardScore低更好）
+                                if (att > 0) return cardScore - curScore;
+                                return curScore - cardScore;
+                            }).set('prompt', get.prompt('haitiantongxun'));
+                            "step 1"
+                            if (!result.bool || !result.links || !result.links.length) {
+                                event.finish(); return;//玩家取消或AI认为不值，放弃发动
+                            }
+                            var xun = result.links[0];//选中的讯牌
+                            //提前记录"是否是最后一张讯牌"——因为之后异步移动可能导致计数不及时
+                            event.wasLastXun = (player.getExpansions('modaiqijian').length == 1);
+                            player.logSkill('haitiantongxun', trigger.player);//记录技能发动日志
+                            //旧判定牌弃置（与鬼道不同的是这里直接弃置，不归还给玩家）
+                            game.cardsDiscard(trigger.player.judging[0]);
+                            //讯牌替换成新判定牌（引擎通过judging[0]引用获取最终判定结果）
+                            trigger.player.judging[0] = xun;
+                            //加入结算追踪队列（引擎以此物理移动讯牌到判定区位置）
+                            trigger.orderingCards.addArray([xun]);
+                            game.log(trigger.player, '的判定牌改为', xun);
+                            game.delay(2);//等待视觉效果完成
+                            "step 2"
+                            //检查是否是最后一张讯牌（使用后扩展区清空）
+                            if (event.wasLastXun) {
+                                player.recover(1);//失去最后一张讯牌时，回复1点体力
+                            }
+                        },
+                        intro: {
+                            content: function () { return get.translation('haitiantongxun_info'); },
+                        },
+                    },
+
                     huijie_lock: {//彗袭子技能：锁定类别，本回合只能使用同类别的牌
                         charlotte: true,
                         mod: {
@@ -490,6 +616,12 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
 
                     daike: "代课",
                     daike_info: "你使用基本牌或普通锦囊结算后，你可以令一名非目标角色摸一张牌，然后弃置一张手牌。",
+
+                    modaiqijian: "末代旗舰",
+                    modaiqijian_info: "当你使用普通锦囊后，你可以将一张手牌扣置于你的武将牌上（称为"讯"牌）。",
+
+                    haitiantongxun: "海天通讯",
+                    haitiantongxun_info: "当一名角色判定时，你可以打出一张"讯"牌替换该判定牌。若你失去了最后一张"讯"牌，你回复1点体力。",
 
                 },
             },
