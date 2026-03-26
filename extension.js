@@ -70,11 +70,15 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     // ③ SP深雪 - IJN 驱逐 3血 大角度规避+彗袭
                     sp_shenyue_R: ["female", "IJN", 3, ["quzhudd", "dajiaoduguibi", "huijie"], ["des:SP深雪，日本驱逐舰"]],
 
+                    // ④ 德意志A59 - KMS 轻巡 3血 防空+多能+代课
+                    deyizhi_R: ["female", "KMS", 3, ["qingxuncl", "fangkong2", "duoneng", "daike"], ["des:德意志A59，德国轻巡洋舰"]],
+
                 },
                 translate: {//武将名称翻译
                     talin_R: "塔林",
                     botelan_R: "波特兰",
                     sp_shenyue_R: "SP深雪",
+                    deyizhi_R: "德意志A59",
                 },
             },
             card: {
@@ -330,6 +334,130 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                         },
                         ai: { result: { player: 1 } },
                     },
+                    // ============================================
+                    // ④ 德意志A59 - 多能
+                    // 触发时机：phaseDrawBegin（摸牌阶段开始时）
+                    // 效果：放弃摸牌 → 观看牌堆顶4张 → 取类别各不同的牌 → 剩余放回顶部
+                    // 实现思路：
+                    //   step 0: skip('phaseDraw')跳过摸牌，get.cards(4)取4张展示
+                    //   step 1: chooseButton让玩家选取，filterButton限制同类型只选1张
+                    //   step 2: gain获得选中牌，cardsGotoPile将剩余放回牌堆顶
+                    // ============================================
+                    duoneng: {
+                        audio: 2,
+                        trigger: { player: "phaseDrawBegin" },//摸牌阶段开始时触发
+                        filter: function (event, player) {
+                            return !event.numFixed;//摸牌数未被固定（未被其他效果锁定）才能放弃摸牌
+                        },
+                        check: function (event, player) {
+                            return player.countCards('h') < player.maxHp;//AI：手牌未满时发动（摸4张比摸2张更有可能补充资源）
+                        },
+                        content: function () {
+                            "step 0"
+                            player.skip('phaseDraw');//放弃本次摸牌阶段
+                            //从牌堆顶取4张并展示给所有人（cardsGotoOrdering使牌进入公开区域）
+                            event.drawCards = get.cards(4);
+                            game.cardsGotoOrdering(event.drawCards);
+                            "step 1"
+                            //玩家从4张中选取类别各不相同的牌（每种类型最多选1张）
+                            var next = player.chooseButton(
+                                ['多能：选取类别各不同的牌（每类最多1张）', [event.drawCards, 'card']],
+                                [0, 3]//最少0张，最多3张（基本/锦囊/装备各1张）
+                            );
+                            next.set('filterButton', function (button) {
+                                //检查已选中按钮中是否有同类型的牌
+                                var selected = ui.selected.buttons;
+                                var cardType = get.type(button.link);
+                                for (var b of selected) {
+                                    if (get.type(b.link) == cardType) return false;//同类型已选，不允许再选
+                                }
+                                return true;
+                            });
+                            next.set('ai', function (button) {
+                                return get.value(button.link, get.player());//AI优先选价值高的牌
+                            });
+                            "step 2"
+                            //result.links是玩家选中的card对象数组
+                            var gained = (result.bool && result.links && result.links.length > 0) ? result.links : [];
+                            //过滤出未被选中的剩余牌
+                            var remaining = event.drawCards.filter(function (c) { return !gained.includes(c); });
+                            //玩家获得选中的牌（'draw'表示从牌堆获得的动画效果）
+                            if (gained.length > 0) player.gain(gained, 'draw');
+                            //剩余牌放回牌堆顶（按原顺序，最前面的在顶部）
+                            if (remaining.length > 0) {
+                                game.cardsGotoPile(
+                                    remaining.slice().reverse(),//reverse使原顺序第一张排在最顶部
+                                    ['top_cards', remaining],
+                                    function (evt, card) {
+                                        if (evt.top_cards.includes(card)) return ui.cardPile.firstChild;
+                                        return null;//放到牌堆顶部
+                                    }
+                                );
+                            }
+                        },
+                        intro: {
+                            content: function () { return get.translation('duoneng_info'); },
+                        },
+                    },
+
+                    // ============================================
+                    // ④ 德意志A59 - 代课
+                    // 触发时机：useCardAfter（使用基本牌/普通锦囊后）
+                    // 效果：选一名非目标角色 → 令其摸1张牌 → 再令其弃1张手牌
+                    // 设计意图：干扰敌人（摸牌可能帮助了敌人，但弃牌作为惩罚；对友军则纯收益）
+                    // ============================================
+                    daike: {
+                        audio: 2,
+                        trigger: { player: "useCardAfter" },//自己使用牌结算后触发
+                        filter: function (event, player) {
+                            var type = get.type(event.card);
+                            var type2 = get.type2(event.card);
+                            //只对基本牌和普通锦囊触发，不含延时锦囊
+                            if (type != 'basic' && (type != 'trick' || type2 == 'delay')) return false;
+                            //必须有非目标玩家（被目标的玩家已被直接影响，不重复操作）
+                            var targets = event.targets || [];
+                            return game.hasPlayer(function (current) {
+                                return current != player && !targets.includes(current);
+                            });
+                        },
+                        check: function (event, player) {
+                            //AI：场上有敌人（用代课干扰敌人）时发动
+                            return game.hasPlayer(function (current) {
+                                return get.attitude(player, current) < 0;
+                            });
+                        },
+                        content: function () {
+                            "step 0"
+                            //选择一名非目标角色（非自己、非此次使用牌的目标）
+                            var triggerTargets = trigger.targets || [];
+                            player.chooseTarget(get.prompt('daike'), function (card, player, target) {
+                                var evt = _status.event.getTrigger();//获取触发的useCard事件
+                                var tgts = evt.targets || [];
+                                return target != player && !tgts.includes(target);
+                            }).set('ai', function (target) {
+                                var player = get.player();
+                                //AI优先对敌人发动（摸牌弃牌相当于换一张手牌，可消耗敌人优质手牌）
+                                return -get.attitude(player, target);
+                            });
+                            "step 1"
+                            if (!result.bool) { event.finish(); return; }
+                            event.daikeTarget = result.targets[0];
+                            player.line(event.daikeTarget, 'green');//画一条绿色连线表示效果指向
+                            event.daikeTarget.draw(1);//目标摸1张牌
+                            "step 2"
+                            //目标弃置1张手牌
+                            if (event.daikeTarget.countCards('h') > 0) {
+                                event.daikeTarget.chooseDiscard('h', true, '代课：弃置一张手牌')
+                                    .set('ai', function (card) {
+                                        return 6 - get.value(card);//AI弃价值低的牌
+                                    });
+                            }
+                        },
+                        intro: {
+                            content: function () { return get.translation('daike_info'); },
+                        },
+                    },
+
                     huijie_lock: {//彗袭子技能：锁定类别，本回合只能使用同类别的牌
                         charlotte: true,
                         mod: {
@@ -356,6 +484,12 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
 
                     huijie: "彗袭",
                     huijie_info: "出牌阶段开始时，你可以选择一种基本牌或非延时锦囊类型：本回合可将任意一张手牌视为该类型使用一次，且本回合只能使用该类别的牌。",
+
+                    duoneng: "多能",
+                    duoneng_info: "摸牌阶段，你可以放弃摸牌，改为观看牌堆顶4张牌，获取其中类别各不相同的牌，然后将剩余牌放回牌堆顶。",
+
+                    daike: "代课",
+                    daike_info: "你使用基本牌或普通锦囊结算后，你可以令一名非目标角色摸一张牌，然后弃置一张手牌。",
 
                 },
             },
