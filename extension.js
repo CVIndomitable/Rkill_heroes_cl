@@ -79,6 +79,9 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     // ⑥ 加贺 - IJN 航母 4血 机动舰队+舰攻出击
                     jiage_R: ["female", "IJN", 4, ["hangmucv", "jidongjiandui", "jiangongchuji"], ["des:加贺，日本舰队航空母舰"]],
 
+                    // ⑦ 提尔比茨 - KMS 战列BB 4血 装甲防护+牵制+北宅
+                    tirpitz_R: ["female", "KMS", 4, ["zhuangjiafh", "qianzhi", "beizhai"], ["des:提尔比茨，德国战列舰"]],
+
                 },
                 translate: {//武将名称翻译
                     talin_R: "塔林",
@@ -87,6 +90,7 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     deyizhi_R: "德意志A59",
                     sp_dadian_R: "SP大淀",
                     jiage_R: "加贺",
+                    tirpitz_R: "提尔比茨",
                 },
             },
             card: {
@@ -467,6 +471,178 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     },
 
                     // ============================================
+                    // ⑦ 提尔比茨 - 牵制
+                    // 锁定技，三个复合效果：
+                    // 1. 手牌装备视为闪（无俾斯麦时激活，chooseToRespond）
+                    // 2. 回合外装备不可移动（暂简化：通过mod.targetEnabled2阻止顺手牵羊/过河拆桥）
+                    // 3. 有俾斯麦时，装备当任意基本牌（chooseToUse/Respond）
+                    // 实现思路：
+                    //   - group关联两个子技能分别处理效果1和效果3
+                    //   - 效果1(qianzhi_shan)在无俾斯麦时激活
+                    //   - 效果3(qianzhi_bismarck)在有俾斯麦时激活（并覆盖效果1）
+                    //   - mod.targetEnabled2实现效果2（回合外保护装备）
+                    // ============================================
+                    qianzhi: {
+                        audio: 2,
+                        forced: true,//锁定技
+                        group: ['qianzhi_shan', 'qianzhi_bismarck'],//两个子技能分别处理不同情境
+                        mod: {
+                            targetEnabled2: function (card, player, target) {
+                                //回合外：他人不能对提尔比茨使用顺手牵羊/过河拆桥拿走装备
+                                //target有此技能意味着target是提尔比茨本人
+                                if (_status.currentPhase != target && player != target) {
+                                    //顺手牵羊、过河拆桥可以移动他人装备
+                                    if (card.name == 'shunshou' || card.name == 'guohe') return false;
+                                }
+                            }
+                        },
+                        intro: {
+                            content: function () { return get.translation('qianzhi_info'); },
+                        },
+                    },
+                    qianzhi_shan: {//牵制子技能：无俾斯麦时，手牌装备视为闪
+                        //此技能在没有俾斯麦时激活，让提尔比茨可以用手牌装备代替闪响应杀
+                        charlotte: true,
+                        enable: 'chooseToRespond',//仅在响应阶段（被杀攻击时）可用
+                        filter: function (event, player) {
+                            //只有场上没有俾斯麦时才激活（有俾斯麦时由qianzhi_bismarck处理）
+                            if (game.hasPlayer(function (p) { return p.name == 'bismarck_R' && p.isIn(); })) return false;
+                            //只有当前情境可以使用闪时才激活
+                            if (!event.filterCard({ name: 'shan', isCard: true }, player, event)) return false;
+                            //手牌或装备区有装备牌才能发动
+                            return player.countCards('hs', function (card) { return get.type(card) == 'equip'; }) > 0;
+                        },
+                        filterCard: function (card, player) {
+                            return get.type(card) == 'equip';//选择一张装备牌
+                        },
+                        position: 'hs',//从手牌和装备区选择
+                        viewAs: { name: 'shan', isCard: true },//视为闪使用
+                        check: function (card) {
+                            return 6 - get.value(card);//AI：优先消耗价值低的装备
+                        },
+                        ai: {
+                            respondSha: true,//AI会在需要响应杀时尝试发动此技能
+                        },
+                    },
+                    qianzhi_bismarck: {//牵制子技能：有俾斯麦时，手牌装备当任意基本牌
+                        //当场上有俾斯麦时激活，功能更强：装备可以当任意基本牌（含闪）
+                        charlotte: true,
+                        enable: ['chooseToUse', 'chooseToRespond'],//出牌和响应阶段均可
+                        filter: function (event, player) {
+                            //只有场上有俾斯麦（bismarck_R）时激活
+                            if (!game.hasPlayer(function (p) { return p.name == 'bismarck_R' && p.isIn(); })) return false;
+                            if (!player.countCards('hs', function (card) { return get.type(card) == 'equip'; })) return false;
+                            //当前情境下至少有一种基本牌可用/可打出
+                            for (var name of ['sha', 'shan', 'tao', 'jiu']) {
+                                if (event.filterCard({ name: name, isCard: true }, player, event)) return true;
+                            }
+                            return false;
+                        },
+                        chooseButton: {
+                            dialog: function (event, player) {
+                                //展示当前情境可用的基本牌类型
+                                var vcards = [];
+                                for (var name of ['sha', 'shan', 'tao', 'jiu']) {
+                                    if (event.filterCard({ name: name, isCard: true }, player, event)) {
+                                        vcards.push(['基本', '', name]);
+                                    }
+                                }
+                                return ui.create.dialog('牵制（俾斯麦加成）', [vcards, 'vcard'], 'hidden');
+                            },
+                            backup: function (links, player) {
+                                return {
+                                    filterCard: function (card) { return get.type(card) == 'equip'; },
+                                    position: 'hs',
+                                    selectCard: 1,
+                                    viewAs: { name: links[0][2], isCard: true },//视为玩家选择的基本牌
+                                    check: function (card) { return 6 - get.value(card); },
+                                    precontent: function () { player.logSkill('qianzhi'); },
+                                };
+                            },
+                            prompt: function (links, player) {
+                                return '牵制（俾斯麦）：将一张装备当作【' + get.translation(links[0][2]) + '】使用或打出';
+                            },
+                        },
+                        ai: { result: { player: 1 } },
+                    },
+
+                    // ============================================
+                    // ⑦ 提尔比茨 - 北宅
+                    // 效果一：弃牌阶段，黑色手牌不计入手牌上限（通过addTempSkill+mod实现）
+                    // 效果二：弃牌阶段结束，可弃置2张黑色手牌，获得随机装备
+                    // 实现思路：
+                    //   - group: ['beizhai_limitadd', 'beizhai_gain'] 分别处理两个效果
+                    //   - beizhai_limitadd在phaseDiscardBegin触发，添加限制mod的临时技能
+                    //   - beizhai_limit（临时）修改maxHandcard，让黑色牌不计入上限
+                    //   - beizhai_gain在phaseDiscardEnd触发，提供弃2黑→随机装备的选项
+                    // ============================================
+                    beizhai: {
+                        audio: 2,
+                        group: ['beizhai_limitadd', 'beizhai_gain'],
+                        intro: {
+                            content: function () { return get.translation('beizhai_info'); },
+                        },
+                    },
+                    beizhai_limitadd: {//北宅子技能：弃牌阶段开始时添加黑色牌不计入限制
+                        charlotte: true,
+                        trigger: { player: "phaseDiscardBegin" },//弃牌阶段开始
+                        forced: true,
+                        content: function () {
+                            //添加临时技能，让黑色手牌在本次弃牌阶段不计入手牌数
+                            //addTempSkill第二参数{player:'phaseDiscardEnd'}表示回合弃牌阶段结束时自动移除
+                            player.addTempSkill('beizhai_limit', { player: 'phaseDiscardEnd' });
+                        },
+                    },
+                    beizhai_limit: {//北宅临时子技能：实际执行黑色牌不计入maxHandcard
+                        //此技能通过addTempSkill动态添加，仅在弃牌阶段生效
+                        charlotte: true,
+                        mod: {
+                            maxHandcard: function (player, num) {
+                                //将手牌中黑色牌的数量加到手牌上限中
+                                //等效于"黑色牌不计入手牌数"——有N张黑色牌，就把上限提高N
+                                var blackCount = player.countCards('h', function (card) {
+                                    return get.color(card) == 'black';
+                                });
+                                return num + blackCount;
+                            }
+                        },
+                    },
+                    beizhai_gain: {//北宅子技能：弃牌阶段结束，弃2黑色牌获得随机装备
+                        charlotte: true,
+                        trigger: { player: "phaseDiscardEnd" },//弃牌阶段结束时触发
+                        filter: function (event, player) {
+                            //需要手牌中有至少2张黑色牌才能发动
+                            return player.countCards('h', function (card) {
+                                return get.color(card) == 'black';
+                            }) >= 2;
+                        },
+                        check: function (event, player) {
+                            return true;//AI：总是愿意发动（装备牌是资源）
+                        },
+                        content: function () {
+                            "step 0"
+                            //玩家选择2张黑色手牌弃置
+                            player.chooseCard('h', '北宅：弃置两张黑色手牌以获得随机装备', [2, 2], function (card) {
+                                return get.color(card) == 'black';//只能选黑色牌
+                            }).set('ai', function (card) {
+                                return 6 - get.value(card);//AI：优先弃价值低的黑色牌
+                            });
+                            "step 1"
+                            if (!result.bool || !result.cards || result.cards.length < 2) {
+                                event.finish(); return;
+                            }
+                            player.discard(result.cards);//弃置选中的两张黑色牌
+                            //从牌堆随机取一张装备牌
+                            var equip = get.cardPile(function (card) {
+                                return get.type(card) == 'equip';
+                            });
+                            if (equip) {
+                                player.gain(equip, 'gain2');//'gain2'=从牌堆获得牌的动画效果
+                            }
+                        },
+                    },
+
+                    // ============================================
                     // ⑥ 加贺 - 机动舰队
                     // 锁定技，两个复合效果：
                     // 1. mod.suit: ♦基本牌视为♣（方块基本牌在花色判定时当梅花处理）
@@ -724,6 +900,12 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
 
                     daike: "代课",
                     daike_info: "你使用基本牌或普通锦囊结算后，你可以令一名非目标角色摸一张牌，然后弃置一张手牌。",
+
+                    qianzhi: "牵制",
+                    qianzhi_info: "锁定技。你手牌中的装备牌可以当作【闪】使用；回合外，他人不能以【顺手牵羊】【过河拆桥】针对你；若场上有俾斯麦，你的手牌装备牌可当任意基本牌使用或打出。",
+
+                    beizhai: "北宅",
+                    beizhai_info: "弃牌阶段，你手牌中的黑色牌不计入手牌数。弃牌阶段结束时，你可以弃置两张黑色手牌，然后从牌堆获得一张随机装备牌。",
 
                     jidongjiandui: "机动舰队",
                     jidongjiandui_info: "锁定技。你的♦基本牌视为♣。你使用黑色【杀】对有防具的角色造成伤害时，该伤害+1。",
