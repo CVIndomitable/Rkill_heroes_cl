@@ -33,6 +33,12 @@
 //联机时客机出牌阶段所在的_status.event.name是game,不是phaseUse。
 //.set("key",val)传递参数后使用数值时应当取后一个参数（val）。
 
+//【命名规范】
+//武将ID：拼音+_R后缀，例如：talin_R、botelan_R、sp_miyuki_R
+//技能ID：纯拼音，不加前缀，参考舰R牌将风格，例如：mijian、shanzhan、huijia
+//子技能ID：主技能ID+下划线+描述，例如：mijian_nores、shanzhan_reset
+//舰种被动直接引用舰R牌将ID（qingxuncl、zhongxunca、fangkong2、huokongld、zhuangjiafh、dajiaoduguibi等）
+
 //【目录】
 //武将列表、武将技能、武将和技能翻译、卡牌包与卡牌技能、卡牌翻译、配置（config）、扩展简介
 
@@ -51,15 +57,20 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
         }, package: {
             character: {
                 character: {//武将注册
-                    //格式：武将id: ["性别", "势力", 血量上限, ["技能1", "技能2"], ["标签"]]
-                    //舰种被动（装甲防护zhuangjiafh、防空fangkong2、大角度规避dajiaoduguibi、火控雷达huokongld）直接引用舰R牌将的技能ID
+                    //格式：武将id: ["性别", "势力", 血量上限, ["技能1", "技能2"], ["des:描述"]]
+                    //武将ID使用拼音+_R后缀，SP武将使用sp_拼音_R
+                    //舰种被动技能直接引用舰R牌将中已有的技能ID，不在本扩展中重复实现
 
                     // ① 塔林 - ΒΜΦCCCP 轻巡 4血 防空+弥坚
-                    rsha_talin: ["female", "ΒΜΦCCCP", 4, ["qingxuncl", "fangkong2", "rsha_mijian"], ["des:塔林，苏联轻巡洋舰"]],
+                    talin_R: ["female", "ΒΜΦCCCP", 4, ["qingxuncl", "fangkong2", "mijian"], ["des:塔林，苏联轻巡洋舰"]],
+
+                    // ② 波特兰 - USN 重巡 4血 火控雷达+善战
+                    botelan_R: ["female", "USN", 4, ["zhongxunca", "huokongld", "shanzhan"], ["des:波特兰，美国重巡洋舰"]],
 
                 },
-                translate: {//武将和技能翻译
-                    rsha_talin: "塔林",
+                translate: {//武将名称翻译
+                    talin_R: "塔林",
+                    botelan_R: "波特兰",
                 },
             },
             card: {
@@ -72,77 +83,180 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
 
                     // ============================================
                     // ① 塔林 - 弥坚
-                    // 受到1点伤害后，四选一：摸2张牌/下一张杀无法被响应/下一次造成伤害+1/获得1护甲
+                    // 触发时机：damageEnd（受到伤害后）
+                    // 效果：四选一 - 摸2张/杀不可响应/伤害+1/护甲+1
                     // ============================================
-                    rsha_mijian: {
-                        audio: 2,
-                        trigger: { player: "damageEnd" },
+                    mijian: {
+                        audio: 2,//语音编号，2表示有两条语音交替播放
+                        trigger: { player: "damageEnd" },//受到伤害结算完毕后触发，player表示受害者是自己
                         filter: function (event, player) {
-                            return true;
+                            return true;//任何情况下都可以触发（无额外条件）
                         },
                         check: function (event, player) {
-                            return true;
+                            return true;//AI判断：始终愿意发动（四个选项均有益）
                         },
                         content: function () {
                             "step 0"
+                            //弹出四选一控制框，AI逻辑在ai回调中
                             player.chooseControl('摸两张牌', '下一张杀无法被响应', '下一次造成伤害+1', '获得一点护甲')
-                                .set('prompt', get.prompt('rsha_mijian'))
-                                .set('prompt2', get.prompt2('rsha_mijian'))
+                                .set('prompt', get.prompt('mijian'))//技能名作为标题
+                                .set('prompt2', get.prompt2('mijian'))//技能描述作为副标题
                                 .set('ai', function () {
-                                    var player = get.player();
-                                    if (player.hp <= 1) return 3;//低血量优先护甲
-                                    if (player.countCards('h') < 2) return 0;//手牌少优先摸牌
-                                    return 2;//默认选伤害+1
+                                    var player = get.player();//get.player()获取当前做选择的角色
+                                    if (player.hp <= 1) return 3;//濒死时优先护甲以抵御下次伤害
+                                    if (player.countCards('h') < 2) return 0;//手牌极少时优先摸牌补充资源
+                                    return 2;//默认选伤害+1，攻击性更强
                                 });
                             "step 1"
+                            //result.index是chooseControl的选项索引（从0开始）
                             switch (result.index) {
                                 case 0:
-                                    player.draw(2);
+                                    player.draw(2);//摸两张牌
                                     break;
                                 case 1:
-                                    player.addTempSkill('rsha_mijian_nores');
+                                    //添加临时技能标记，下次使用杀时触发
+                                    player.addTempSkill('mijian_nores');
                                     break;
                                 case 2:
-                                    player.addTempSkill('rsha_mijian_jiashang');
+                                    //添加临时技能标记，下次造成伤害时触发
+                                    player.addTempSkill('mijian_jiashang');
                                     break;
                                 case 3:
-                                    player.changeHujia(1);
+                                    player.changeHujia(1);//护甲+1
                                     break;
                             }
                         },
                         intro: {
                             content: function () {
-                                return get.translation('rsha_mijian_info');
+                                return get.translation('mijian_info');
                             },
                         },
                     },
-                    rsha_mijian_nores: {//弥坚子技能：下一张杀不可被响应
-                        trigger: { player: "useCard" },
-                        forced: true,
+                    mijian_nores: {//弥坚子技能：下一张杀不可被响应（无法闪避）
+                        trigger: { player: "useCard" },//使用牌时触发
+                        forced: true,//锁定触发，不询问玩家
                         filter: function (event, player) {
+                            //只对杀和自制杀（sheji9）生效
                             return event.card.name == "sha" || event.card.name == "sheji9";
                         },
                         content: function () {
+                            //directHit：令所有角色对此牌直接命中（不能使用闪响应）
                             trigger.directHit.addArray(game.players);
-                            player.removeSkill('rsha_mijian_nores');
+                            player.removeSkill('mijian_nores');//效果触发一次后移除，实现"下一次"限制
+                        },
+                        charlotte: true,//不在武将牌上显示此技能名
+                    },
+                    mijian_jiashang: {//弥坚子技能：下一次造成伤害+1
+                        trigger: { source: "damageBegin1" },//造成伤害开始时触发，source表示伤害来源是自己
+                        forced: true,
+                        content: function () {
+                            trigger.num++;//伤害值+1
+                            player.removeSkill('mijian_jiashang');//触发一次后移除
                         },
                         charlotte: true,
                     },
-                    rsha_mijian_jiashang: {//弥坚子技能：下一次造成伤害+1
-                        trigger: { source: "damageBegin1" },
-                        forced: true,
-                        content: function () {
-                            trigger.num++;
-                            player.removeSkill('rsha_mijian_jiashang');
+
+                    // ============================================
+                    // ② 波特兰 - 善战
+                    // 触发方式：主动技（出牌阶段使用/响应阶段打出）
+                    // 效果：每轮限X+1次，弃一张基本牌，视为使用/打出任意基本牌
+                    //       X=本局累计造成的伤害点数（通过shanzhan_count子技能统计）
+                    // 实现思路：
+                    //   - shanzhan主技能：弹出目标牌类型选择框（chooseButton），再选手牌消耗
+                    //   - shanzhan_count：监听damageEnd事件，累计伤害到storage中
+                    //   - shanzhan_reset：监听phaseBegin（自己回合开始），清空本轮使用计数
+                    // ============================================
+                    shanzhan: {
+                        audio: 2,
+                        enable: ['chooseToUse', 'chooseToRespond'],//出牌阶段和响应阶段均可发动
+                        group: ['shanzhan_count', 'shanzhan_reset'],//关联的子技能组
+                        filter: function (event, player) {
+                            //检查本轮使用次数是否已达上限（上限=累计伤害数+1）
+                            var maxUse = (player.getStorage('shanzhan_damage') || 0) + 1;
+                            if (player.countMark('shanzhan_used') >= maxUse) return false;
+                            //检查手牌中有没有基本牌可以消耗
+                            if (!player.countCards('hs', function (card) { return get.type(card) == 'basic'; })) return false;
+                            //检查当前情境下有没有至少一种基本牌可以使用/打出
+                            for (var name of ['sha', 'shan', 'tao', 'jiu']) {
+                                if (event.filterCard({ name: name, isCard: true }, player, event)) return true;
+                            }
+                            return false;
                         },
+                        chooseButton: {
+                            dialog: function (event, player) {
+                                //构建可选的目标牌类型列表（只显示当前情境下能用的）
+                                var vcards = [];
+                                for (var name of ['sha', 'shan', 'tao', 'jiu']) {
+                                    var card = { name: name, isCard: true };
+                                    if (event.filterCard(card, player, event)) {
+                                        //vcard格式：['牌类型分类', '花色', '牌名']
+                                        vcards.push(['基本', '', name]);
+                                    }
+                                }
+                                return ui.create.dialog('善战', [vcards, 'vcard'], 'hidden');
+                            },
+                            backup: function (links, player) {
+                                //links[0]是玩家选中的按钮对应的vcard数组，links[0][2]是牌名
+                                return {
+                                    filterCard: function (card, player) {
+                                        return get.type(card) == 'basic';//消耗一张基本牌
+                                    },
+                                    selectCard: 1,//选择1张牌
+                                    viewAs: {
+                                        name: links[0][2],//视为玩家选择的牌类型
+                                        isCard: true,
+                                    },
+                                    check: function (card) {
+                                        return 5 - get.value(card);//AI：优先消耗价值低的牌
+                                    },
+                                    precontent: function () {
+                                        player.logSkill('shanzhan');//记录技能发动日志
+                                        player.addMark('shanzhan_used', 1, false);//本轮使用次数+1（false=不显示标记）
+                                    },
+                                };
+                            },
+                            prompt: function (links, player) {
+                                return '善战：将一张基本牌当作【' + get.translation(links[0][2]) + '】使用或打出';
+                            },
+                            check: function (button, player) {
+                                //AI选择要转化成哪种牌：优先有效果的
+                                var event = _status.event;
+                                if (event.filterCard({ name: button.link[2], isCard: true }, player, event)) return 1;
+                                return 0;
+                            },
+                        },
+                        ai: {
+                            result: { player: 1 },//AI认为此技能对自己有益，会主动发动
+                        },
+                    },
+                    shanzhan_count: {//善战子技能：统计本局累计造成伤害
+                        trigger: { source: "damageEnd" },//造成伤害结算完毕后触发，source表示伤害来源是自己
+                        forced: true,
                         charlotte: true,
+                        content: function () {
+                            //累计伤害存入storage（trigger.num是本次伤害点数）
+                            player.setStorage('shanzhan_damage', (player.getStorage('shanzhan_damage') || 0) + trigger.num);
+                        },
+                    },
+                    shanzhan_reset: {//善战子技能：每回合开始时重置本轮使用次数
+                        trigger: { player: "phaseBegin" },//自己回合开始时触发
+                        forced: true,
+                        charlotte: true,
+                        content: function () {
+                            //清除本轮已使用次数的标记
+                            var used = player.countMark('shanzhan_used');
+                            if (used > 0) player.removeMark('shanzhan_used', used);
+                        },
                     },
 
                 },
                 translate: {//技能翻译
 
-                    rsha_mijian: "弥坚",
-                    rsha_mijian_info: "当你受到伤害后，你可以选择一项：1.摸两张牌；2.下一张使用的【杀】无法被响应；3.下一次造成的伤害+1；4.获得一点护甲。",
+                    mijian: "弥坚",
+                    mijian_info: "当你受到伤害后，你可以选择一项：1.摸两张牌；2.下一张使用的【杀】无法被响应；3.下一次造成的伤害+1；4.获得一点护甲。",
+
+                    shanzhan: "善战",
+                    shanzhan_info: "每轮限X+1次，你可以将一张基本牌当作任意一张基本牌使用或打出（X为你本局累计造成伤害点数）。",
 
                 },
             },
