@@ -82,6 +82,9 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     // ⑦ 提尔比茨 - KMS 战列BB 4血 装甲防护+牵制+北宅
                     tirpitz_R: ["female", "KMS", 4, ["zhuangjiafh", "qianzhi", "beizhai"], ["des:提尔比茨，德国战列舰"]],
 
+                    // ⑧ 阿拉斯加 - USN 战列BB 4血 装甲防护+先锋+狂欢开幕
+                    alasijia_R: ["female", "USN", 4, ["zhuangjiafh", "xianfeng", "kuanhuankaimu"], ["des:阿拉斯加，美国大型巡洋舰"]],
+
                 },
                 translate: {//武将名称翻译
                     talin_R: "塔林",
@@ -91,6 +94,7 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     sp_dadian_R: "SP大淀",
                     jiage_R: "加贺",
                     tirpitz_R: "提尔比茨",
+                    alasijia_R: "阿拉斯加",
                 },
             },
             card: {
@@ -467,6 +471,115 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                         },
                         intro: {
                             content: function () { return get.translation('daike_info'); },
+                        },
+                    },
+
+                    // ============================================
+                    // ⑧ 阿拉斯加 - 先锋
+                    // 锁定技：使用牌并指定目标后，对于每个【未横置】的目标：
+                    //   1. 将该目标从本次牌的目标列表中移除（本次牌对其无效）
+                    //   2. 横置该目标的武将牌（link/连环状态）
+                    //   3. 通知狂欢开幕（阳面）效果：摸1张牌（每次横置一个角色摸一张）
+                    // 实现思路：
+                    //   - trigger: useCard（使用牌后，目标已确定但效果未结算）
+                    //   - 复制targets避免在遍历时修改原数组
+                    //   - noname无独立link触发事件，阳面摸牌直接在先锋content中通过logSkill('kuanhuankaimu')归因
+                    // ============================================
+                    xianfeng: {
+                        audio: 2,
+                        forced: true,//锁定技：自动触发，不询问玩家
+                        trigger: { player: "useCard" },//使用牌后触发（targets已确定）
+                        filter: function (event, player) {
+                            //需要有目标，且至少一个目标未横置
+                            return event.targets && event.targets.length > 0
+                                && event.targets.some(function (t) { return !t.isLinked(); });
+                        },
+                        content: function () {
+                            //复制targets列表（防止在遍历中修改原数组导致跳过）
+                            var targets = trigger.targets.slice();
+                            var linkedTargets = [];//记录本次横置的目标（用于摸牌计数）
+                            for (var i = 0; i < targets.length; i++) {
+                                var t = targets[i];
+                                if (!t.isLinked()) {
+                                    //从本次牌的目标列表移除：此次牌对其无效
+                                    trigger.targets.remove(t);
+                                    t.link();//横置目标武将牌（连环状态）
+                                    linkedTargets.push(t);
+                                }
+                            }
+                            //狂欢开幕（阳面）：令角色横置时摸1张牌
+                            //noname无link专属触发，此处直接在先锋content中实现，通过logSkill归因给狂欢开幕
+                            if (linkedTargets.length > 0 && player.hasSkill('kuanhuankaimu')) {
+                                player.logSkill('kuanhuankaimu');//日志显示狂欢开幕而非先锋
+                                player.draw(linkedTargets.length);//每横置一人摸1张
+                            }
+                        },
+                        intro: {
+                            content: function () { return get.translation('xianfeng_info'); },
+                        },
+                    },
+
+                    // ============================================
+                    // ⑧ 阿拉斯加 - 狂欢开幕
+                    // 两个效果（不使用翻面机制，两个效果均可用）：
+                    //   阳面：当先锋令角色横置时，摸1张牌（已整合到先锋content中）
+                    //   阴面：主动技，出牌阶段，弃置1张手牌→令一名横置角色重置→该角色摸1张牌
+                    // 实现：
+                    //   - 阳面效果集成到先锋（xianfeng）的content中，通过logSkill('kuanhuankaimu')归因
+                    //   - 阴面效果作为phaseUse触发（每回合1次），玩家主动选择是否使用
+                    //   - group: ['kuanhuankaimu_yin'] 关联阴面子技能
+                    // ============================================
+                    kuanhuankaimu: {
+                        audio: 2,
+                        nobracket: true,//防止4字以上技能名被截断
+                        group: ['kuanhuankaimu_yin'],//阴面效果作为子技能
+                        intro: {
+                            content: function () { return get.translation('kuanhuankaimu_info'); },
+                        },
+                    },
+                    kuanhuankaimu_yin: {//狂欢开幕子技能（阴面）：弃牌令横置角色重置并摸1
+                        //phaseUse触发一次，玩家可选择弃置1张手牌来执行效果
+                        charlotte: true,
+                        trigger: { player: "phaseUse" },//出牌阶段开始时触发一次
+                        usable: 1,//每回合仅能发动1次
+                        filter: function (event, player) {
+                            //需要有手牌可弃，且场上有横置的角色
+                            return player.countCards('h') > 0
+                                && game.hasPlayer(function (t) { return t.isLinked(); });
+                        },
+                        check: function (event, player) {
+                            //AI：如果有横置的友方角色，值得解除其连环
+                            return game.hasPlayer(function (t) {
+                                return t.isLinked() && get.attitude(player, t) > 0;
+                            });
+                        },
+                        content: function () {
+                            "step 0"
+                            //玩家选择弃置1张手牌（代价）
+                            player.chooseCard('h', get.prompt('kuanhuankaimu'), '弃置一张手牌，令一名横置角色重置并摸1张牌', false)
+                                .set('ai', function (card) {
+                                    return 6 - get.value(card);//AI：优先弃价值低的牌
+                                });
+                            "step 1"
+                            if (!result.bool || !result.cards || !result.cards.length) {
+                                event.finish(); return;//玩家取消
+                            }
+                            player.discard(result.cards);//弃置所选手牌
+                            player.logSkill('kuanhuankaimu');//记录技能发动日志
+                            //选择目标：一名横置（连环状态）的角色
+                            player.chooseTarget('狂欢开幕：选择一名横置的角色，令其重置并摸1张牌', function (card, player, target) {
+                                return target.isLinked();//只能选横置的角色
+                            }).set('ai', function (target) {
+                                //AI：优先解除友方横置（态度>0则解除，<0则帮助敌人失去横置护盾）
+                                return get.attitude(get.player(), target);
+                            });
+                            "step 2"
+                            if (!result.bool || !result.targets || !result.targets.length) {
+                                event.finish(); return;
+                            }
+                            var t = result.targets[0];
+                            t.link();//重置：link()切换状态，从横置变为正常（因已横置，再link()则恢复）
+                            t.draw(1);//该角色摸1张牌
                         },
                     },
 
@@ -900,6 +1013,12 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
 
                     daike: "代课",
                     daike_info: "你使用基本牌或普通锦囊结算后，你可以令一名非目标角色摸一张牌，然后弃置一张手牌。",
+
+                    xianfeng: "先锋",
+                    xianfeng_info: "锁定技。当你使用牌指定目标后，对于其中未横置的目标，该牌对其无效，然后横置其武将牌，若有狂欢开幕则摸1张牌。",
+
+                    kuanhuankaimu: "狂欢开幕",
+                    kuanhuankaimu_info: "（阳面）先锋令角色横置时，你摸1张牌。（阴面）出牌阶段，你可以弃置1张手牌，令一名横置的角色重置，然后该角色摸1张牌。",
 
                     qianzhi: "牵制",
                     qianzhi_info: "锁定技。你手牌中的装备牌可以当作【闪】使用；回合外，他人不能以【顺手牵羊】【过河拆桥】针对你；若场上有俾斯麦，你的手牌装备牌可当任意基本牌使用或打出。",
