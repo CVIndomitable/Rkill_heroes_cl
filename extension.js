@@ -88,6 +88,9 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     // ⑨ 齐柏林伯爵 - KMS 航母 4血 枭啸+鹰返
                     qibolin_R: ["female", "KMS", 4, ["hangmucv", "xiaoxiao", "yingfan"], ["des:齐柏林伯爵，德国航空母舰"]],
 
+                    // ⑩ 初霜 - IJN 驱逐 3血 大角度规避+不太合格的护卫+泥头船来啦
+                    chushuang_R: ["female", "IJN", 3, ["quzhudd", "dajiaoduguibi", "bugehuwei", "nituochuanlai"], ["des:初霜，日本驱逐舰，末期的护卫"]],
+
                 },
                 translate: {//武将名称翻译
                     talin_R: "塔林",
@@ -99,6 +102,7 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                     tirpitz_R: "提尔比茨",
                     alasijia_R: "阿拉斯加",
                     qibolin_R: "齐柏林伯爵",
+                    chushuang_R: "初霜",
                 },
             },
             card: {
@@ -1105,6 +1109,173 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
                         },
                     },
 
+                    // ============================================
+                    // ⑩ 初霜 - 不太合格的护卫
+                    // 实现思路：
+                    //   - group包含三个子技能，主技能负责显示护卫对象
+                    //   - bugehuwei_start: gameStart触发，强制选择护卫对象，存于storage.bugehuwei
+                    //   - bugehuwei_draw: global useCardAfter触发，若护卫被他人指定则摸1张展示
+                    //   - bugehuwei_switch: global hpAfter触发，若护卫体力变动可选择换人
+                    // ============================================
+                    bugehuwei: {
+                        audio: 2,
+                        nobracket: true,
+                        group: ['bugehuwei_start', 'bugehuwei_draw', 'bugehuwei_switch'],
+                        intro: {
+                            content: function (storage, player, skill) {
+                                //storage即player.storage['bugehuwei']，存储的是护卫对象（player对象）
+                                var guard = player.storage.bugehuwei;
+                                if (guard && guard.isIn && guard.isIn()) {
+                                    return '护卫对象：' + get.translation(guard.name);
+                                }
+                                return '暂无护卫对象';
+                            },
+                        },
+                    },
+                    bugehuwei_start: {//不太合格的护卫子技能：游戏开始选护卫
+                        //gameStart时强制触发，选择一名其他角色作为护卫对象，存入storage
+                        charlotte: true,//不在武将牌上单独显示
+                        trigger: { global: "gameStart" },
+                        forced: true,//强制触发，不询问是否发动
+                        content: function () {
+                            "step 0"
+                            //选择一名其他角色作为护卫对象
+                            player.chooseTarget(get.prompt('bugehuwei'), function (card, player, target) {
+                                return target != player;//不能选自己
+                            }).set('ai', function (target) {
+                                //AI：优先选择友方角色
+                                return get.attitude(get.player(), target);
+                            });
+                            "step 1"
+                            if (result.bool && result.targets && result.targets.length > 0) {
+                                var guard = result.targets[0];
+                                player.storage.bugehuwei = guard;//将护卫对象存入storage
+                                player.update();//刷新武将牌显示（让intro生效）
+                                game.log(player, '选择了', guard, '作为护卫对象');
+                            }
+                        },
+                    },
+                    bugehuwei_draw: {//不太合格的护卫子技能：护卫被指定时摸牌展示
+                        //当护卫对象被他人使用的牌指定为目标后，从牌堆摸1张牌并展示
+                        charlotte: true,
+                        trigger: { global: "useCardAfter" },
+                        forced: true,//锁定触发，满足条件自动发动
+                        filter: function (event, player) {
+                            var guard = player.storage.bugehuwei;
+                            if (!guard || !guard.isIn || !guard.isIn()) return false;//护卫必须存活
+                            if (!event.targets || !event.targets.includes(guard)) return false;//护卫需要是目标
+                            return event.player != player;//不响应自己使用的牌（只响应他人对护卫出牌）
+                        },
+                        content: function () {
+                            //从牌堆随机摸1张牌并展示
+                            var newCard = get.cardPile(function () { return true; });//随机取一张牌
+                            if (newCard) {
+                                player.gain(newCard, 'gain2');//'gain2'=从牌堆获得牌的动画
+                                game.log(player, '展示了', newCard);//在日志中展示该牌
+                            }
+                        },
+                    },
+                    bugehuwei_switch: {//不太合格的护卫子技能：护卫体力变动时可换人
+                        //当护卫对象体力变动后，询问是否更换护卫对象
+                        charlotte: true,
+                        trigger: { global: "hpAfter" },
+                        filter: function (event, player) {
+                            var guard = player.storage.bugehuwei;
+                            if (!guard || !guard.isIn || !guard.isIn()) return false;
+                            return event.player == guard;//只在护卫对象体力变动时触发
+                        },
+                        check: function (event, player) {
+                            //AI：护卫对象处于危险（低体力）时才考虑换人
+                            var guard = player.storage.bugehuwei;
+                            return guard && guard.hp <= 1;
+                        },
+                        content: function () {
+                            "step 0"
+                            //询问是否更换护卫对象
+                            player.chooseTarget('不太合格的护卫：是否更换护卫对象？', function (card, player, target) {
+                                return target != player;
+                            }).set('ai', function (target) {
+                                return get.attitude(get.player(), target);//AI：选友方
+                            });
+                            "step 1"
+                            if (result.bool && result.targets && result.targets.length > 0) {
+                                var newGuard = result.targets[0];
+                                player.storage.bugehuwei = newGuard;//更新护卫对象
+                                player.update();
+                                game.log(player, '更换护卫对象为', newGuard);
+                            }
+                        },
+                    },
+
+                    // ============================================
+                    // ⑩ 初霜 - 泥头船来啦
+                    // 限定技，结束阶段发动：弃所有牌→选目标→造成等量伤害
+                    // 实现思路：
+                    //   - limited: true + skillAnimation: true 标记为限定技（只能用一次）
+                    //   - trigger: phaseJieshuBegin 在结束阶段开始时触发
+                    //   - content步骤：step0标记限定技并选目标，step1弃所有牌并记录数量，step2造成伤害
+                    // ============================================
+                    nituochuanlai: {
+                        audio: 2,
+                        nobracket: true,
+                        unique: true,//唯一技（限定技配套标记）
+                        mark: true,//在武将牌上显示标记（发动后消失）
+                        skillAnimation: true,//发动时有限定技觉醒动画
+                        animationColor: "thunder",//动画颜色：雷属性（蓝紫色）
+                        limited: true,//限定技：本局只能发动一次
+                        trigger: { player: "phaseJieshuBegin" },//结束阶段开始时触发
+                        filter: function (event, player) {
+                            if (player.storage.nituochuanlai) return false;//已发动过则不能再发动
+                            return player.countCards('hej') > 0;//需要有牌才能发动
+                        },
+                        check: function (event, player) {
+                            //AI：自身手牌多且有敌人时发动
+                            return player.countCards('hej') >= 3;
+                        },
+                        init: function (player, skill) {
+                            player.storage[skill] = false;//初始化限定技状态（false=未发动）
+                        },
+                        content: function () {
+                            "step 0"
+                            //标记限定技已使用（觉醒动画在此触发）
+                            player.awakenSkill('nituochuanlai');
+                            //选择一名目标角色
+                            player.chooseTarget(get.prompt('nituochuanlai'), function (card, player, target) {
+                                return target != player && target.isIn();//必须选他人
+                            }).set('forced', true)//必须选择
+                            .set('ai', function (target) {
+                                //AI：优先选择敌方角色（负数=敌对方）
+                                return -get.attitude(get.player(), target);
+                            });
+                            "step 1"
+                            if (!result.bool || !result.targets || !result.targets.length) {
+                                event.finish(); return;
+                            }
+                            event.nituoTarget = result.targets[0];//记录目标
+                            //获取并弃置所有区域的牌（手牌h+装备区e+判定区j）
+                            var allCards = player.getCards('hej');
+                            event.nituoCount = allCards.length;//记录弃牌数量
+                            if (allCards.length > 0) {
+                                player.discard(allCards);//弃置所有牌
+                                game.log(player, '弃置了', event.nituoCount, '张牌');
+                            }
+                            "step 2"
+                            //对目标造成等同于弃牌数的伤害
+                            if (event.nituoCount > 0 && event.nituoTarget && event.nituoTarget.isIn()) {
+                                event.nituoTarget.damage(event.nituoCount, player);
+                                //damage(num, source) - 由player对nituoTarget造成伤害
+                            }
+                        },
+                        intro: {
+                            content: "limited",//显示"限定技（已发动/未发动）"
+                        },
+                        ai: {
+                            result: {
+                                player: 1,//AI：对自身有利时发动
+                            },
+                        },
+                    },
+
                     huijie_lock: {//彗袭子技能：锁定类别，本回合只能使用同类别的牌
                         charlotte: true,
                         mod: {
@@ -1170,6 +1341,12 @@ game.import("extension", function (lib, game, ui, get, ai, _status) {
 
                     haitiantongxun: "海天通讯",
                     haitiantongxun_info: "当一名角色判定时，你可以打出一张"讯"牌替换该判定牌。若你失去了最后一张"讯"牌，你回复1点体力。",
+
+                    bugehuwei: "不太合格的护卫",
+                    bugehuwei_info: "游戏开始时，你选择一名其他角色作为护卫对象。当护卫对象成为其他角色使用牌的目标后，你从牌堆摸一张牌并展示之。当护卫对象体力变动时，你可以更换护卫对象。",
+
+                    nituochuanlai: "泥头船来啦",
+                    nituochuanlai_info: "限定技。结束阶段，你可以弃置你的所有牌（手牌、装备牌、判定区牌），然后选择一名其他角色，对其造成X点伤害（X为弃置牌的张数）。",
 
                 },
             },
